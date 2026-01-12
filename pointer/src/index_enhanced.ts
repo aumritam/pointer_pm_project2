@@ -296,38 +296,12 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				background: rgba(0,0,0,0.5); z-index: 1000;
 				display: flex; align-items: center; justify-content: center;
 				backdrop-filter: blur(4px);
-				transition: all 0.3s ease;
-			}
-			.popup-overlay.minimized {
-				background: transparent;
-				backdrop-filter: none;
 			}
 			.popup {
 				background: white; border-radius: 16px; padding: 2rem;
 				max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;
 				box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
 				z-index: 1001;
-				transition: all 0.3s ease;
-			}
-			.popup-overlay.minimized .popup {
-				position: fixed;
-				top: 20px;
-				right: 20px;
-				max-width: 300px;
-				width: 300px;
-				max-height: 60px;
-				overflow: hidden;
-				padding: 1rem;
-				border-radius: 12px;
-				box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-			}
-			.popup h1 {
-				font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem;
-				color: #2d3748;
-			}
-			.popup-overlay.minimized .popup h1 {
-				font-size: 1rem;
-				margin-bottom: 0.25rem;
 			}
 			.popup h1 {
 				font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem;
