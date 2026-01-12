@@ -1,0 +1,22 @@
+-- Seed data for feedback table with 20 realistic entries
+INSERT INTO feedback (source, text, created_at) VALUES
+('support_ticket', 'The dashboard keeps crashing when I try to export reports. This is happening multiple times per day and affecting our team productivity.', '2025-01-12T10:30:00Z'),
+('github_issue', 'API rate limiting is too aggressive. We keep getting 429 errors even with reasonable usage patterns.', '2025-01-12T09:15:00Z'),
+('twitter', 'Love the new features but the mobile app is super slow lately. Please optimize performance!', '2025-01-11T18:45:00Z'),
+('community_forum', 'Documentation for the new API endpoints is missing. Cant find any examples for authentication.', '2025-01-11T14:20:00Z'),
+('support_ticket', 'Critical bug: Data loss occurred when using bulk import. We lost 3 hours of work!', '2025-01-11T11:00:00Z'),
+('github_issue', 'Memory usage spikes when processing large datasets. Application becomes unresponsive.', '2025-01-10T16:30:00Z'),
+('twitter', 'The recent update broke our workflow integration. Please rollback or provide fix ASAP.', '2025-01-10T13:15:00Z'),
+('community_forum', 'Search functionality is not working properly. Getting irrelevant results for common queries.', '2025-01-10T10:45:00Z'),
+('support_ticket', 'Enterprise customer here - SLA breach. Support ticket has been open for 48 hours without response.', '2025-01-09T15:30:00Z'),
+('github_issue', 'WebSocket connections dropping randomly. Real-time features are unreliable.', '2025-01-09T12:00:00Z'),
+('twitter', 'Amazing product! The new analytics features are exactly what we needed. Great work team!', '2025-01-09T08:30:00Z'),
+('community_forum', 'Feature request: Need ability to customize export formats. CSV is not sufficient for our needs.', '2025-01-08T17:20:00Z'),
+('support_ticket', 'Billing issue: Charged twice for the same subscription. Need immediate refund.', '2025-01-08T14:00:00Z'),
+('github_issue', 'Type definitions in the SDK are outdated. Missing new API endpoints.', '2025-01-08T09:45:00Z'),
+('twitter', 'The performance improvements in the latest release are fantastic! Thank you for listening to feedback.', '2025-01-07T16:15:00Z'),
+('community_forum', 'Getting CORS errors when trying to integrate with our frontend. Configuration unclear.', '2025-01-07T13:30:00Z'),
+('support_ticket', 'Security concern: Sensitive data exposed in error messages. This is a compliance issue.', '2025-01-07T10:15:00Z'),
+('github_issue', 'Database connection pooling not working as expected. Too many connections being opened.', '2025-01-06T15:45:00Z'),
+('twitter', 'Customer support is excellent! Resolved my issue within minutes. Very impressed.', '2025-01-06T11:20:00Z'),
+('community_forum', 'UI/UX suggestion: The navigation menu could be more intuitive. Current layout is confusing.', '2025-01-06T09:30:00Z');
