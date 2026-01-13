@@ -21,6 +21,14 @@
 	"ai": {
 		"binding": "AI"
 	},
+	"workflows": [
+		{
+			"name": "pointer-analysis-workflow",
+			"binding": "POINTER_WORKFLOW",
+			"script_name": "AnalysisWorkflow",
+			"class_name": "AnalysisWorkflow"
+		}
+	],
 	"triggers": {
 		"crons": ["0 */6 * * *"]
 	}

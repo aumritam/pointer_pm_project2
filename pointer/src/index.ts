@@ -1,3 +1,5 @@
+import { AnalysisWorkflow } from './workflows/analysis';
+
 interface FeedbackEntry {
 	id: number;
 	source: string;
@@ -22,6 +24,7 @@ interface Escalation {
 interface Env {
 	pointer_db: D1Database;
 	AI: any;
+	POINTER_WORKFLOW: any;
 }
 
 // Enhanced source weights for escalation scoring
@@ -1155,10 +1158,16 @@ export default {
 		console.log('Scheduled workflow execution started');
 		
 		try {
-			const result = await executeWorkflow(env);
-			console.log('Scheduled workflow result:', result.message);
+			// Trigger the Cloudflare Workflow
+			const result = await env.POINTER_WORKFLOW.create({
+				params: {}
+			});
+			console.log('Cloudflare Workflow triggered:', result);
 		} catch (error) {
 			console.error('Scheduled workflow failed:', error);
 		}
 	},
 } satisfies ExportedHandler<Env>;
+
+// Export the AnalysisWorkflow for Cloudflare Workflows
+export { AnalysisWorkflow };
