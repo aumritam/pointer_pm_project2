@@ -11,10 +11,12 @@ interface Escalation {
 	theme: string;
 	score: number;
 	problem_statement: string;
-	evidence: string[];
+	evidence: string[] | Array<{ text: string; source: string }>;
 	sentiment_distribution: { positive: number; neutral: number; negative: number };
 	source_distribution: Record<string, number>;
 	trend_direction: 'increasing' | 'decreasing' | 'stable';
+	status?: string;
+	notes?: string;
 }
 
 interface Env {
@@ -222,6 +224,9 @@ async function generateTopEscalations(env: Env): Promise<Escalation[]> {
 
 	const themes = [...new Set(feedback.results.map(f => f.theme).filter((theme): theme is string => Boolean(theme && theme !== 'general')))];
 	
+	// Get all escalation statuses
+	const statuses = await getAllEscalationStatuses(env);
+	
 	const escalations: Escalation[] = [];
 	for (const theme of themes) {
 		const themeFeedback = feedback.results.filter(f => f.theme === theme);
@@ -243,18 +248,145 @@ async function generateTopEscalations(env: Env): Promise<Escalation[]> {
 		const trend_direction = analyzeTrend(feedback.results, theme);
 		const problem_statement = await generateProblemStatement(theme, feedback.results, env);
 
+		const statusInfo = statuses[theme];
+
 		escalations.push({
 			theme,
 			score,
 			problem_statement,
-			evidence: themeFeedback.slice(0, 2).map(f => f.text),
+			evidence: themeFeedback.slice(0, 2).map(f => ({ text: f.text, source: f.source })),
 			sentiment_distribution,
 			source_distribution,
-			trend_direction
+			trend_direction,
+			status: statusInfo?.status || 'open',
+			notes: statusInfo?.notes
 		});
 	}
 
 	return escalations.sort((a, b) => b.score - a.score).slice(0, 3);
+}
+
+// Workflow: Store escalation results in D1 for caching
+async function storeWorkflowResults(escalations: Escalation[], env: Env): Promise<void> {
+	const workflowId = `workflow_${Date.now()}`;
+	await env.pointer_db.prepare(
+		'INSERT INTO workflow_results (escalations, workflow_id, status) VALUES (?, ?, ?)'
+	).bind(JSON.stringify(escalations), workflowId, 'completed').run();
+}
+
+// Workflow: Get cached results from previous workflow execution
+async function getCachedResults(env: Env): Promise<Escalation[] | null> {
+	const result = await env.pointer_db.prepare(
+		'SELECT escalations FROM workflow_results ORDER BY created_at DESC LIMIT 1'
+	).first();
+	
+	if (result && result.escalations) {
+		try {
+			return JSON.parse(result.escalations as string);
+		} catch (error) {
+			console.error('Error parsing cached results:', error);
+		}
+	}
+	return null;
+}
+
+// Workflow: Execute background analysis (step 1)
+async function workflowProcessAllFeedback(env: Env): Promise<{ success: boolean; processed: number }> {
+	try {
+		const feedback = await env.pointer_db.prepare('SELECT id, text FROM feedback WHERE sentiment IS NULL').all() as { results: { id: number; text: string }[] };
+		
+		for (const entry of feedback.results) {
+			const analysis = await analyzeFeedbackWithAI(entry.text, env);
+			await env.pointer_db.prepare(
+				'UPDATE feedback SET sentiment = ?, theme = ? WHERE id = ?'
+			).bind(analysis.sentiment, analysis.theme, entry.id).run();
+		}
+		
+		return { success: true, processed: feedback.results.length };
+	} catch (error) {
+		console.error('Workflow feedback processing failed:', error);
+		return { success: false, processed: 0 };
+	}
+}
+
+// Workflow: Generate escalations (step 2)
+async function workflowGenerateEscalations(env: Env): Promise<{ success: boolean; escalations: Escalation[] }> {
+	try {
+		const escalations = await generateTopEscalations(env);
+		return { success: true, escalations };
+	} catch (error) {
+		console.error('Workflow escalation generation failed:', error);
+		return { success: false, escalations: [] };
+	}
+}
+
+// Workflow: Store results (step 3)
+async function workflowStoreResults(escalations: Escalation[], env: Env): Promise<{ success: boolean }> {
+	try {
+		await storeWorkflowResults(escalations, env);
+		return { success: true };
+	} catch (error) {
+		console.error('Workflow result storage failed:', error);
+		return { success: false };
+	}
+}
+
+// Resolution tracking functions
+async function getEscalationStatus(theme: string, env: Env): Promise<{ status: string; notes?: string } | null> {
+	const result = await env.pointer_db.prepare(
+		'SELECT status, notes FROM escalation_status WHERE theme = ?'
+	).bind(theme).first();
+	
+	return result ? { status: result.status as string, notes: result.notes as string } : null;
+}
+
+async function updateEscalationStatus(theme: string, status: string, env: Env, notes?: string): Promise<void> {
+	await env.pointer_db.prepare(
+		'INSERT OR REPLACE INTO escalation_status (theme, status, updated_at, notes) VALUES (?, ?, ?, ?)'
+	).bind(theme, status, new Date().toISOString(), notes || null).run();
+}
+
+// Get all escalation statuses for display
+async function getAllEscalationStatuses(env: Env): Promise<Record<string, { status: string; notes?: string }>> {
+	const results = await env.pointer_db.prepare(
+		'SELECT theme, status, notes FROM escalation_status'
+	).all() as { results: { theme: string; status: string; notes?: string }[] };
+	
+	const statuses: Record<string, { status: string; notes?: string }> = {};
+	for (const result of results.results) {
+		statuses[result.theme] = {
+			status: result.status,
+			notes: result.notes
+		};
+	}
+	
+	return statuses;
+}
+async function executeWorkflow(env: Env): Promise<{ success: boolean; message: string }> {
+	try {
+		// Step 1: Process all feedback
+		const step1 = await workflowProcessAllFeedback(env);
+		if (!step1.success) {
+			return { success: false, message: 'Failed to process feedback' };
+		}
+
+		// Step 2: Generate escalations
+		const step2 = await workflowGenerateEscalations(env);
+		if (!step2.success) {
+			return { success: false, message: 'Failed to generate escalations' };
+		}
+
+		// Step 3: Store results
+		const step3 = await workflowStoreResults(step2.escalations, env);
+		if (!step3.success) {
+			return { success: false, message: 'Failed to store results' };
+		}
+
+		return { success: true, message: `Workflow completed: processed ${step1.processed} feedback entries` };
+	} catch (error) {
+		console.error('Workflow execution failed:', error);
+		return { success: false, message: 'Workflow execution failed' };
+	}
 }
 
 function generatePopupHTML(escalations: Escalation[]): string {
@@ -278,6 +410,7 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				top: 0; left: 0; right: 0; bottom: 0;
 				background: linear-gradient(to bottom, #f7fafc, #edf2f7);
 				z-index: 1;
+				transition: opacity 0.3s ease;
 			}
 			.mock-nav {
 				background: white; height: 60px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
@@ -301,6 +434,13 @@ function generatePopupHTML(escalations: Escalation[]): string {
 			.popup-overlay.minimized {
 				background: transparent;
 				backdrop-filter: none;
+				top: auto;
+				left: auto;
+				right: 20px;
+				bottom: auto;
+				width: 350px;
+				height: 120px;
+				display: block;
 			}
 			.popup {
 				background: white; border-radius: 16px; padding: 2rem;
@@ -350,6 +490,93 @@ function generatePopupHTML(escalations: Escalation[]): string {
 			.popup-overlay.minimized .escalation {
 				display: none;
 			}
+			.feedback-form {
+				background: white; border-radius: 12px; padding: 1.5rem;
+				margin: 2rem auto; max-width: 600px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+			}
+			.feedback-form h3 {
+				color: #2d3748; margin-bottom: 1rem; font-size: 1.25rem;
+			}
+			.form-group {
+				margin-bottom: 1rem;
+			}
+			.form-group label {
+				display: block; color: #4a5568; font-weight: 600; margin-bottom: 0.5rem;
+			}
+			.form-group select, .form-group textarea {
+				width: 100%; padding: 0.75rem; border: 1px solid #e2e8f0;
+				border-radius: 8px; font-family: inherit; font-size: 0.875rem;
+			}
+			.form-group textarea {
+				resize: vertical; min-height: 100px;
+			}
+			.submit-btn {
+				background: #4299e1; color: white; border: none; padding: 0.75rem 1.5rem;
+				border-radius: 8px; cursor: pointer; font-weight: 600; width: 100%;
+			}
+			.submit-btn:hover { background: #3182ce; }
+			.status-info {
+				background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px;
+				padding: 1rem; margin-bottom: 1rem; color: #075985;
+			}
+			.status-info .time-ago {
+				font-weight: 600; color: #0c4a6e;
+			}
+			.success-message {
+				background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+				padding: 1rem; border-radius: 8px; margin-top: 1rem; text-align: center;
+			}
+			.resolution-tracking {
+				background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+				padding: 1rem; margin-top: 1rem;
+			}
+			.resolution-header {
+				display: flex; justify-content: space-between; align-items: center;
+				margin-bottom: 0.75rem;
+			}
+			.resolution-title {
+				font-weight: 600; color: #2d3748; font-size: 0.875rem;
+			}
+			.status-badge {
+				padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem;
+				font-weight: 600; text-transform: uppercase;
+			}
+			.status-open {
+				background: #fed7d7; color: #c53030;
+			}
+			.status-in-progress {
+				background: #feebc8; color: #c05621;
+			}
+			.status-resolved {
+				background: #c6f6d5; color: #22543d;
+			}
+			.status-controls {
+				display: flex; gap: 0.5rem; margin-top: 0.5rem;
+			}
+			.status-btn {
+				padding: 0.25rem 0.5rem; border: 1px solid #e2e8f0; border-radius: 4px;
+				background: white; color: #4a5568; font-size: 0.75rem; cursor: pointer;
+				transition: all 0.2s ease;
+			}
+			.status-btn:hover {
+				background: #f7fafc; border-color: #cbd5e0;
+			}
+			.status-btn.active {
+				background: #4299e1; color: white; border-color: #4299e1;
+			}
+			.resolution-notes {
+				margin-top: 0.5rem;
+			}
+			.resolution-notes textarea {
+				width: 100%; min-height: 60px; padding: 0.5rem;
+				border: 1px solid #e2e8f0; border-radius: 4px; font-size: 0.75rem;
+				resize: vertical;
+			}
+			.update-btn {
+				background: #4299e1; color: white; border: none; padding: 0.5rem 1rem;
+				border-radius: 4px; font-size: 0.75rem; cursor: pointer; margin-top: 0.5rem;
+			}
+			.update-btn:hover { background: #3182ce; }
 			.escalation-header {
 				display: flex; justify-content: between; align-items: center;
 				margin-bottom: 1rem;
@@ -408,7 +635,7 @@ function generatePopupHTML(escalations: Escalation[]): string {
 	<body>
 		<div class="dashboard">
 			<div class="mock-nav">
-				<div style="font-weight: 600; color: #2d3748;">Pointer PM Dashboard</div>
+				<div style="font-weight: 600; color: #2d3748;">Pointer - PM Dashboard</div>
 				<div style="margin-left: auto; color: #718096;">Analytics Overview</div>
 			</div>
 			<div class="mock-sidebar">
@@ -420,6 +647,37 @@ function generatePopupHTML(escalations: Escalation[]): string {
 			</div>
 			<div class="mock-content">
 				<h2 style="color: #2d3748; margin-bottom: 1rem;">Product Metrics Overview</h2>
+				
+				<div class="status-info">
+					<div>Last Analysis Update: <span class="time-ago" id="lastUpdate">Loading...</span></div>
+					<div style="margin-top: 0.5rem; font-size: 0.875rem;">Next automatic analysis in: <span id="nextUpdate">Loading...</span></div>
+				</div>
+				
+				<div class="feedback-form">
+					<h3>Submit New Feedback</h3>
+					<form id="feedbackForm">
+						<div class="form-group">
+							<label for="source">Source Type:</label>
+							<select id="source" name="source" required>
+								<option value="">Select source...</option>
+								<option value="support_ticket">Support Ticket</option>
+								<option value="github_issue">GitHub Issue</option>
+								<option value="twitter">Twitter</option>
+								<option value="survey">Survey</option>
+								<option value="community_forum">Community Forum</option>
+							</select>
+						</div>
+						<div class="form-group">
+							<label for="text">Feedback Details:</label>
+							<textarea id="text" name="text" placeholder="Enter the feedback details here..." required></textarea>
+						</div>
+						<button type="submit" class="submit-btn">Submit Feedback</button>
+					</form>
+					<div id="successMessage" class="success-message" style="display: none;">
+						Feedback submitted successfully! It will be included in the next analysis.
+					</div>
+				</div>
+				
 				<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
 					<div style="background: white; padding: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
 						<div style="color: #718096; font-size: 0.875rem;">Total Users</div>
@@ -457,9 +715,33 @@ function generatePopupHTML(escalations: Escalation[]): string {
 						<div class="problem-statement">${escalation.problem_statement}</div>
 						<div class="evidence-section">
 							<div class="evidence-title">🔍 Key Evidence:</div>
-							${escalation.evidence.map(quote => `
-								<div class="evidence-quote">"${quote}"</div>
-							`).join('')}
+							${escalation.evidence.map(evidence => {
+								if (typeof evidence === 'string') {
+									// Old format: just string
+									return `<div class="evidence-quote">"${evidence}"</div>`;
+								} else {
+									// New format: object with text and source
+									return `<div class="evidence-quote">"${evidence.text}" (${evidence.source})</div>`;
+								}
+							}).join('')}
+						</div>
+						
+						<div class="resolution-tracking">
+							<div class="resolution-header">
+								<div class="resolution-title">📋 Resolution Status</div>
+								<span class="status-badge status-${escalation.status || 'open'}" id="status-${index}">
+									${escalation.status || 'open'}
+								</span>
+							</div>
+							
+							<div class="status-controls">
+								<button class="status-btn ${escalation.status === 'open' ? 'active' : ''}" 
+										onclick="updateStatus('${escalation.theme}', 'open', ${index})">Open</button>
+								<button class="status-btn ${escalation.status === 'in-progress' ? 'active' : ''}" 
+										onclick="updateStatus('${escalation.theme}', 'in-progress', ${index})">In Progress</button>
+								<button class="status-btn ${escalation.status === 'resolved' ? 'active' : ''}" 
+										onclick="updateStatus('${escalation.theme}', 'resolved', ${index})">Resolved</button>
+							</div>
 						</div>
 					</div>
 				`).join('')}
@@ -477,14 +759,178 @@ function generatePopupHTML(escalations: Escalation[]): string {
 		function minimizePopup() {
 			const overlay = document.getElementById('popupOverlay');
 			const expandBtn = document.getElementById('expandBtn');
+			const dashboard = document.querySelector('.dashboard');
+			
 			overlay.classList.add('minimized');
 			expandBtn.style.display = 'block';
+			dashboard.style.opacity = '1';
 		}
 		function expandPopup() {
 			const overlay = document.getElementById('popupOverlay');
 			const expandBtn = document.getElementById('expandBtn');
+			const dashboard = document.querySelector('.dashboard');
+			
 			overlay.classList.remove('minimized');
 			expandBtn.style.display = 'none';
+			dashboard.style.opacity = '0.3';
+		}
+
+		// Time tracking functions
+		function formatTimeAgo(dateString) {
+			const date = new Date(dateString);
+			const now = new Date();
+			const diffMs = now - date;
+			const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+			const diffDays = Math.floor(diffHours / 24);
+			
+			if (diffDays > 0) {
+				return diffDays + " day" + (diffDays > 1 ? "s" : "") + " ago";
+			} else if (diffHours > 0) {
+				return diffHours + " hour" + (diffHours > 1 ? "s" : "") + " ago";
+			} else {
+				return "Just now";
+			}
+		}
+
+		function timeUntilNextAnalysis() {
+			const now = new Date();
+			const nextAnalysis = new Date(now);
+			nextAnalysis.setHours(nextAnalysis.getHours() + 6);
+			nextAnalysis.setMinutes(0, 0, 0);
+			
+			const diffMs = nextAnalysis - now;
+			const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+			const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+			
+			return diffHours + "h " + diffMinutes + "m";
+		}
+
+		// Load status information
+		async function loadStatus() {
+			try {
+				const response = await fetch('/status');
+				const status = await response.json();
+				
+				// Update time displays
+				if (status.lastUpdate === 'Available') {
+					document.getElementById('lastUpdate').textContent = 'Available';
+				} else {
+					document.getElementById('lastUpdate').textContent = status.lastUpdate;
+				}
+				
+				document.getElementById('nextUpdate').textContent = timeUntilNextAnalysis();
+				
+				// Update every minute
+				setInterval(() => {
+					document.getElementById('nextUpdate').textContent = timeUntilNextAnalysis();
+				}, 60000);
+				
+			} catch (error) {
+				console.error('Error loading status:', error);
+				document.getElementById('lastUpdate').textContent = 'Unknown';
+				document.getElementById('nextUpdate').textContent = 'Unknown';
+			}
+		}
+
+		// Feedback form submission
+		async function submitFeedback(event) {
+			event.preventDefault();
+			
+			const formData = new FormData(event.target);
+			const source = formData.get('source');
+			const text = formData.get('text');
+			
+			console.log('Submitting feedback:', { source, text });
+			
+			try {
+				const response = await fetch('/feedback', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({ source, text })
+				});
+				
+				const result = await response.json();
+				console.log('Feedback submission response:', result);
+				
+				if (response.ok) {
+					// Show success message
+					document.getElementById('successMessage').style.display = 'block';
+					
+					// Reset form
+					event.target.reset();
+					
+					// Hide success message after 3 seconds
+					setTimeout(() => {
+						document.getElementById('successMessage').style.display = 'none';
+					}, 3000);
+					
+				} else {
+					console.error('Submission failed:', result);
+					alert('Error submitting feedback. Please try again.');
+				}
+			} catch (error) {
+				console.error('Error submitting feedback:', error);
+				alert('Error submitting feedback. Please try again.');
+			}
+		}
+
+		// Initialize on page load
+		document.addEventListener('DOMContentLoaded', function() {
+			loadStatus();
+			document.getElementById('feedbackForm').addEventListener('submit', submitFeedback);
+		});
+
+		// Resolution tracking functions
+		let currentStatuses = {};
+
+		function updateStatus(theme, status, index) {
+			// Update button states
+			const buttons = document.querySelectorAll('.status-controls button[onclick*="' + theme + '"]');
+			buttons.forEach(btn => btn.classList.remove('active'));
+			event.target.classList.add('active');
+			
+			// Update status badge
+			const statusBadge = document.getElementById('status-' + index);
+			statusBadge.textContent = status;
+			statusBadge.className = 'status-badge status-' + status;
+			
+			// Auto-save status change
+			saveResolution(theme, status);
+		}
+
+		async function saveResolution(theme, status) {
+			try {
+				const response = await fetch('/resolution', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						theme: theme,
+						status: status,
+						notes: ''
+					})
+				});
+				
+				if (response.ok) {
+					// Show brief success feedback on the button
+					const activeBtn = document.querySelector('.status-btn.active[onclick*="' + theme + '"]');
+					const originalText = activeBtn.textContent;
+					activeBtn.textContent = '✓ Saved';
+					activeBtn.style.background = '#48bb78';
+					
+					setTimeout(() => {
+						activeBtn.textContent = originalText;
+						activeBtn.style.background = '#4299e1';
+					}, 1000);
+				} else {
+					console.error('Error updating resolution status');
+				}
+			} catch (error) {
+				console.error('Error updating resolution:', error);
+			}
 		}
 		</script>
 	</body>
@@ -496,9 +942,140 @@ export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		
-		if (url.pathname === '/escalations') {
+		// Workflow endpoints
+		if (url.pathname === '/workflow') {
+			const action = url.searchParams.get('action');
+			
+			switch (action) {
+				case 'process_all_feedback':
+					const result1 = await workflowProcessAllFeedback(env);
+					return new Response(JSON.stringify(result1), {
+						headers: { 'Content-Type': 'application/json' }
+					});
+				
+				case 'generate_escalations':
+					const result2 = await workflowGenerateEscalations(env);
+					return new Response(JSON.stringify(result2), {
+						headers: { 'Content-Type': 'application/json' }
+					});
+				
+				case 'store_escalation_results':
+					const escalationsParam = url.searchParams.get('escalations');
+					if (escalationsParam) {
+						const escalations = JSON.parse(escalationsParam);
+						const result3 = await workflowStoreResults(escalations, env);
+						return new Response(JSON.stringify(result3), {
+							headers: { 'Content-Type': 'application/json' }
+						});
+					}
+					return new Response('Missing escalations parameter', { status: 400 });
+				
+				case 'execute':
+					const workflowResult = await executeWorkflow(env);
+					return new Response(JSON.stringify(workflowResult), {
+						headers: { 'Content-Type': 'application/json' }
+					});
+				
+				default:
+					return new Response('Invalid workflow action', { status: 400 });
+			}
+		}
+
+		// Resolution tracking endpoint
+		if (url.pathname === '/resolution' && request.method === 'POST') {
 			try {
-				const escalations = await generateTopEscalations(env);
+				const { theme, status, notes } = await request.json() as { theme: string; status: string; notes?: string };
+				
+				if (!theme || !status) {
+					return new Response('Missing theme or status', { status: 400 });
+				}
+				
+				if (!['open', 'in-progress', 'resolved'].includes(status)) {
+					return new Response('Invalid status', { status: 400 });
+				}
+				
+				await updateEscalationStatus(theme, status, env, notes);
+				
+				return new Response(JSON.stringify({ success: true }), {
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} catch (error) {
+				console.error('Error updating resolution:', error);
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
+		// Feedback submission endpoint
+		if (url.pathname === '/feedback' && request.method === 'POST') {
+			try {
+				const { source, text } = await request.json() as { source: string; text: string };
+				
+				console.log('Feedback submission received:', { source, text });
+				
+				if (!source || !text) {
+					return new Response('Missing source or text', { status: 400 });
+				}
+				
+				// Insert new feedback into D1
+				const result = await env.pointer_db.prepare(
+					'INSERT INTO feedback (source, text, created_at) VALUES (?, ?, ?)'
+				).bind(source, text, new Date().toISOString()).run();
+				
+				console.log('Feedback inserted successfully:', result);
+				
+				return new Response(JSON.stringify({ success: true, insertedId: result.meta.last_row_id }), {
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} catch (error) {
+				console.error('Error submitting feedback:', error);
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
+		// Status endpoint for workflow monitoring
+		if (url.pathname === '/status') {
+			const cached = await getCachedResults(env);
+			
+			if (cached) {
+				// Get the actual timestamp from workflow_results
+				const result = await env.pointer_db.prepare(
+					'SELECT created_at FROM workflow_results ORDER BY created_at DESC LIMIT 1'
+				).first();
+				
+				const lastUpdate = result?.created_at || new Date().toISOString();
+				const status = {
+					status: 'ready',
+					lastUpdate: lastUpdate,
+					escalationsCount: cached.length
+				};
+				
+				return new Response(JSON.stringify(status), {
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} else {
+				const status = {
+					status: 'processing',
+					lastUpdate: 'No cached results',
+					escalationsCount: 0
+				};
+				
+				return new Response(JSON.stringify(status), {
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+		}
+
+		// Main endpoints - try to use cached results first (background processing)
+		if (url.pathname === '/escalations' || url.pathname === '/') {
+			try {
+				// Try to get cached results first (no waiting for AI)
+				let escalations = await getCachedResults(env);
+				
+				// If no cached results, fall back to real-time processing
+				if (!escalations) {
+					escalations = await generateTopEscalations(env);
+				}
+				
 				return new Response(generatePopupHTML(escalations), {
 					headers: { 'Content-Type': 'text/html' }
 				});
@@ -508,18 +1085,18 @@ export default {
 			}
 		}
 
-		if (url.pathname === '/') {
-			try {
-				const escalations = await generateTopEscalations(env);
-				return new Response(generatePopupHTML(escalations), {
-					headers: { 'Content-Type': 'text/html' }
-				});
-			} catch (error) {
-				console.error('Error:', error);
-				return new Response('Error loading dashboard', { status: 500 });
-			}
-		}
-
 		return new Response('Not Found', { status: 404 });
+	},
+
+	// Scheduled event handler for automatic workflow execution
+	async scheduled(event, env, ctx): Promise<void> {
+		console.log('Scheduled workflow execution started');
+		
+		try {
+			const result = await executeWorkflow(env);
+			console.log('Scheduled workflow result:', result.message);
+		} catch (error) {
+			console.error('Scheduled workflow failed:', error);
+		}
 	},
 } satisfies ExportedHandler<Env>;
