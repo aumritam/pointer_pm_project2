@@ -313,11 +313,11 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				position: fixed;
 				top: 20px;
 				right: 20px;
-				max-width: 300px;
-				width: 300px;
-				max-height: 60px;
+				max-width: 350px;
+				width: 350px;
+				max-height: 120px;
 				overflow: hidden;
-				padding: 1rem;
+				padding: 1.2rem;
 				border-radius: 12px;
 				box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
 			}
@@ -326,12 +326,19 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				color: #2d3748;
 			}
 			.popup-overlay.minimized .popup h1 {
-				font-size: 1rem;
-				margin-bottom: 0.25rem;
+				font-size: 1.1rem;
+				margin-bottom: 0.5rem;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
 			}
-			.popup h1 {
-				font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem;
-				color: #2d3748;
+			.popup-overlay.minimized .view-escalations-btn {
+				margin-top: 0.75rem;
+				font-size: 0.9rem;
+				padding: 0.6rem 1.2rem;
+			}
+			.popup-overlay.minimized .popup-subtitle {
+				display: none;
 			}
 			.popup-subtitle {
 				color: #718096; margin-bottom: 1.5rem; font-size: 0.875rem;
@@ -339,6 +346,9 @@ function generatePopupHTML(escalations: Escalation[]): string {
 			.escalation {
 				background: #f8f9fa; border-radius: 12px; padding: 1.5rem;
 				margin-bottom: 1rem; border-left: 4px solid #e53e3e;
+			}
+			.popup-overlay.minimized .escalation {
+				display: none;
 			}
 			.escalation-header {
 				display: flex; justify-content: between; align-items: center;
@@ -379,6 +389,20 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				margin-top: 1rem; width: 100%;
 			}
 			.close-btn:hover { background: #2d3748; }
+			.popup-overlay.minimized .close-btn {
+				display: none;
+			}
+			.view-escalations-btn {
+				background: #e53e3e; color: white; border: none; padding: 0.5rem 1rem;
+				border-radius: 6px; cursor: pointer; font-weight: 600;
+				font-size: 0.875rem; margin-top: 0.5rem;
+			}
+			.view-escalations-btn:hover { background: #c53030; }
+			.escalation-count {
+				background: #e53e3e; color: white; padding: 0.25rem 0.5rem;
+				border-radius: 9999px; font-size: 0.75rem; font-weight: 600;
+				margin-left: 0.5rem;
+			}
 		</style>
 	</head>
 	<body>
@@ -413,9 +437,9 @@ function generatePopupHTML(escalations: Escalation[]): string {
 			</div>
 		</div>
 
-		<div class="popup-overlay">
+		<div class="popup-overlay" id="popupOverlay">
 			<div class="popup">
-				<h1>🚨 Critical Escalations Detected</h1>
+				<h1> Critical Escalations Detected</h1>
 				<div class="popup-subtitle">Top 3 issues requiring immediate attention based on user feedback analysis</div>
 				
 				${escalations.map((escalation, index) => `
@@ -440,11 +464,29 @@ function generatePopupHTML(escalations: Escalation[]): string {
 					</div>
 				`).join('')}
 				
-				<button class="close-btn" onclick="document.querySelector('.popup-overlay').style.display='none'">
-					Acknowledge & Continue
+				<button class="close-btn" onclick="minimizePopup()">
+					Acknowledge
+				</button>
+				<button class="view-escalations-btn" onclick="expandPopup()" style="display: none;" id="expandBtn">
+					View Escalations
 				</button>
 			</div>
 		</div>
+
+		<script>
+		function minimizePopup() {
+			const overlay = document.getElementById('popupOverlay');
+			const expandBtn = document.getElementById('expandBtn');
+			overlay.classList.add('minimized');
+			expandBtn.style.display = 'block';
+		}
+		function expandPopup() {
+			const overlay = document.getElementById('popupOverlay');
+			const expandBtn = document.getElementById('expandBtn');
+			overlay.classList.remove('minimized');
+			expandBtn.style.display = 'none';
+		}
+		</script>
 	</body>
 	</html>
 	`;
