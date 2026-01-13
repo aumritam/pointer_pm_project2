@@ -1,4 +1,4 @@
-# **Pointer - A Product Management Dashboard** 
+# **Pointer - A Product Management Dashboard Widget** 
 
 **AI-Powered Product Escalation Management System for Cloudflare Workers**
 
