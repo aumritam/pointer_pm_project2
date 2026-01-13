@@ -577,6 +577,34 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				border-radius: 4px; font-size: 0.75rem; cursor: pointer; margin-top: 0.5rem;
 			}
 			.update-btn:hover { background: #3182ce; }
+			.forward-section {
+				background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+				padding: 1rem; margin-top: 1rem;
+			}
+			.forward-header {
+				display: flex; justify-content: space-between; align-items: center;
+				margin-bottom: 0.75rem;
+			}
+			.forward-title {
+				font-weight: 600; color: #2d3748; font-size: 0.875rem;
+			}
+			.forward-controls {
+				display: flex; gap: 0.5rem; align-items: center;
+			}
+			.forward-select {
+				padding: 0.5rem; border: 1px solid #e2e8f0; border-radius: 4px;
+				background: white; color: #4a5568; font-size: 0.75rem;
+				min-width: 150px;
+			}
+			.forward-btn {
+				background: #805ad5; color: white; border: none; padding: 0.5rem 1rem;
+				border-radius: 4px; font-size: 0.75rem; cursor: pointer;
+				transition: all 0.2s ease;
+			}
+			.forward-btn:hover { background: #6b46c1; }
+			.forward-btn.submitted {
+				background: #48bb78; cursor: default;
+			}
 			.escalation-header {
 				display: flex; justify-content: between; align-items: center;
 				margin-bottom: 1rem;
@@ -646,7 +674,7 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				<div style="padding: 0.75rem 1rem; color: #718096;">Reports</div>
 			</div>
 			<div class="mock-content">
-				<h2 style="color: #2d3748; margin-bottom: 1rem;">Product Metrics Overview</h2>
+				<h2 style="color: #2d3748; margin-bottom: 1rem;">Product Review Escalation Overview and Mock Ticket Submission</h2>
 				
 				<div class="status-info">
 					<div>Last Analysis Update: <span class="time-ago" id="lastUpdate">Loading...</span></div>
@@ -674,22 +702,7 @@ function generatePopupHTML(escalations: Escalation[]): string {
 						<button type="submit" class="submit-btn">Submit Feedback</button>
 					</form>
 					<div id="successMessage" class="success-message" style="display: none;">
-						Feedback submitted successfully! It will be included in the next analysis.
-					</div>
-				</div>
-				
-				<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
-					<div style="background: white; padding: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-						<div style="color: #718096; font-size: 0.875rem;">Total Users</div>
-						<div style="font-size: 1.5rem; font-weight: 600; color: #2d3748;">12,847</div>
-					</div>
-					<div style="background: white; padding: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-						<div style="color: #718096; font-size: 0.875rem;">Active Sessions</div>
-						<div style="font-size: 1.5rem; font-weight: 600; color: #2d3748;">3,291</div>
-					</div>
-					<div style="background: white; padding: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-						<div style="color: #718096; font-size: 0.875rem;">Satisfaction</div>
-						<div style="font-size: 1.5rem; font-weight: 600; color: #2d3748;">87.3%</div>
+						Feedback submitted successfully! It will be included in next analysis.
 					</div>
 				</div>
 			</div>
@@ -714,7 +727,7 @@ function generatePopupHTML(escalations: Escalation[]): string {
 						</div>
 						<div class="problem-statement">${escalation.problem_statement}</div>
 						<div class="evidence-section">
-							<div class="evidence-title">🔍 Key Evidence:</div>
+							<div class="evidence-title">Key Review:</div>
 							${escalation.evidence.map(evidence => {
 								if (typeof evidence === 'string') {
 									// Old format: just string
@@ -726,9 +739,31 @@ function generatePopupHTML(escalations: Escalation[]): string {
 							}).join('')}
 						</div>
 						
+						<div class="forward-section">
+							<div class="forward-header">
+								<div class="forward-title">Forward to:</div>
+							</div>
+							
+							<div class="forward-controls">
+								<select class="forward-select" id="forward-${index}">
+									<option value="">Select team...</option>
+									<option value="engineering">Engineering Team</option>
+									<option value="product">Product Team</option>
+									<option value="design">Design Team</option>
+									<option value="support">Customer Support</option>
+									<option value="security">Security Team</option>
+									<option value="infrastructure">Infrastructure Team</option>
+									<option value="jira">JIRA</option>
+								</select>
+								<button class="forward-btn" id="forwardBtn-${index}" onclick="forwardEscalation('${escalation.theme}', ${index})">
+									Submit
+								</button>
+							</div>
+						</div>
+						
 						<div class="resolution-tracking">
 							<div class="resolution-header">
-								<div class="resolution-title">📋 Resolution Status</div>
+								<div class="resolution-title">Resolution Status</div>
 								<span class="status-badge status-${escalation.status || 'open'}" id="status-${index}">
 									${escalation.status || 'open'}
 								</span>
@@ -915,7 +950,7 @@ function generatePopupHTML(escalations: Escalation[]): string {
 				});
 				
 				if (response.ok) {
-					// Show brief success feedback on the button
+					// Show brief success feedback on button
 					const activeBtn = document.querySelector('.status-btn.active[onclick*="' + theme + '"]');
 					const originalText = activeBtn.textContent;
 					activeBtn.textContent = '✓ Saved';
@@ -931,6 +966,33 @@ function generatePopupHTML(escalations: Escalation[]): string {
 			} catch (error) {
 				console.error('Error updating resolution:', error);
 			}
+		}
+
+		function forwardEscalation(theme, index) {
+			const select = document.getElementById('forward-' + index);
+			const button = document.getElementById('forwardBtn-' + index);
+			const selectedTeam = select.value;
+			
+			if (!selectedTeam) {
+				alert('Please select a team to forward to');
+				return;
+			}
+			
+			// Mock forward functionality
+			console.log('Forwarding escalation "' + theme + '" to: ' + selectedTeam);
+			
+			// Update button to show submitted state
+			button.textContent = 'Submitted';
+			button.classList.add('submitted');
+			button.disabled = true;
+			select.disabled = true;
+			
+			// Store forward info (mock)
+			if (!currentStatuses[theme]) {
+				currentStatuses[theme] = {};
+			}
+			currentStatuses[theme].forwardedTo = selectedTeam;
+			currentStatuses[theme].forwardedAt = new Date().toISOString();
 		}
 		</script>
 	</body>
